@@ -73,9 +73,18 @@ def node_escalate(state: ReviewState) -> dict:
 
     # TODO: call interrupt(payload) where payload kind="escalation" contains:
     #       pr_url, confidence, confidence_reasoning, summary, risk_factors, questions.
-    # answers = interrupt({...})
-    # return {"escalation_answers": answers}
-    raise NotImplementedError("Call interrupt() with an escalation payload")
+    payload = {
+        "kind": "escalation",
+        "pr_url": state["pr_url"],
+        "confidence": a.confidence,
+        "confidence_reasoning": a.confidence_reasoning,
+        "summary": a.summary,
+        "risk_factors": a.risk_factors,
+        "questions": questions,
+    }
+    answers = interrupt(payload)
+    return {"escalation_answers": answers}
+    
 
 
 def node_synthesize(state: ReviewState) -> dict:
@@ -86,7 +95,20 @@ def node_synthesize(state: ReviewState) -> dict:
     #     containing the original diff + initial analysis + Q&A.
     #   - return {"analysis": refined}
     # `node_commit` will then post the refined review to the PR.
-    raise NotImplementedError("Synthesize a refined PRAnalysis using the reviewer answers")
+    state["analysis"] = get_llm().with_structured_output(PRAnalysis).invoke(
+        {"role": "system", "content": (
+            "Senior reviewer. Structured output. "
+            "You are given a PR diff, an initial review analysis, and a set of Q&A from a human reviewer. "
+            "Produce a refined review analysis that incorporates the human's answers."
+        )},
+        {"role": "user", "content": (
+            f"Title: {state['pr_title']}\n"
+            f"Diff:\n{state['pr_diff']}\n\n"
+            f"Initial Analysis:\n{state['analysis'].model_dump_json()}\n\n"
+            f"Human Q&A:\n{state['escalation_answers']}"
+        )},
+    )
+    return {"analysis": state["analysis"]}
 
 
 def node_human_approval(state):
@@ -162,6 +184,8 @@ def build_graph():
     g.add_edge("human_approval", "commit")
     g.add_edge("commit", END)
     # TODO: wire escalate → synthesize → commit  (commit already → END)
+    g.add_edge("escalate", "synthesize")
+    g.add_edge("synthesize", "commit")
     return g.compile(checkpointer=MemorySaver())
 
 
